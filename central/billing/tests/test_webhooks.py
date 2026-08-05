@@ -75,6 +75,23 @@ class TestStripeWebhookReceiver(IntegrationTestCase):
 		self.assertEqual(self._events(), 1)  # no duplicate
 		self.assertEqual(enqueue.call_count, 1)  # no second job
 
+	def test_replay_recovers_when_exists_check_loses_insert_race(self):
+		# Simulate two near-simultaneous deliveries: a concurrent request's
+		# exists-check misses the row the other just committed, so it takes the
+		# insert path and hits the duplicate key. _store_and_enqueue must treat
+		# that as an already-stored replay (UniqueValidationError — gateway_event_id
+		# is a unique field, not the primary key), not let it escape as a 500.
+		with signature(valid=True):
+			process_webhook("Stripe", PAYLOAD, HEADERS)  # first delivery, succeeds for real
+
+			with patch("frappe.db.exists", return_value=False):
+				with patch("frappe.enqueue") as enqueue:
+					process_webhook("Stripe", PAYLOAD, HEADERS)  # forced race
+
+		self.assertEqual(frappe.local.response.http_status_code, 200)
+		self.assertEqual(self._events(), 1)  # still only one row
+		enqueue.assert_not_called()
+
 
 R_EVENT_ID = "evt_razorpay_webhook_1"
 R_PAYLOAD = (

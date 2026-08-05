@@ -60,8 +60,9 @@ def _store_and_enqueue(gateway, event, payload: bytes):
 
 	The unique constraint on gateway_event_id is the real guard: under a
 	concurrent flood two requests can both pass the exists() check, so the losing
-	insert is caught (DuplicateEntryError) and treated as an already-stored
-	replay — exactly one row, exactly one enqueued job.
+	insert is caught (UniqueValidationError — gateway_event_id is a unique
+	field, not the primary key) and treated as an already-stored replay —
+	exactly one row, exactly one enqueued job.
 	"""
 	if frappe.db.exists("Webhook Event", {"gateway_event_id": event.gateway_event_id}):
 		return
@@ -77,7 +78,7 @@ def _store_and_enqueue(gateway, event, payload: bytes):
 				"status": "Received",
 			}
 		).insert(ignore_permissions=True)
-	except frappe.DuplicateEntryError:
+	except frappe.UniqueValidationError:
 		return  # lost the race — another request stored it first
 
 	frappe.enqueue(
