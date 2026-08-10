@@ -278,8 +278,8 @@ def deliver_webhook(attempt: str) -> dict:
 				   "payload": {"payment": {"entity": {"id": att.gateway_transaction_id}}}}
 
 	event = frappe.get_doc({
-		"doctype": "Webhook Event", "gateway": att.gateway, "event_type": event_type,
-		"gateway_event_id": payload.get("id") or frappe.generate_hash(12),
+		"doctype": "Webhook Event", "source": adapter_key, "event_type": event_type,
+		"event_id": payload.get("id") or frappe.generate_hash(12),
 		"status": "Received", "raw_payload": frappe.as_json(payload),
 	}).insert(ignore_permissions=True)
 	result = charges.apply_webhook(event.name)

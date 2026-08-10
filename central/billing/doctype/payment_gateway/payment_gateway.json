@@ -137,11 +137,6 @@
    "link_fieldname": "gateway"
   },
   {
-   "group": "Transactions",
-   "link_doctype": "Webhook Event",
-   "link_fieldname": "gateway"
-  },
-  {
    "group": "Subscriptions",
    "link_doctype": "Subscription",
    "link_fieldname": "gateway"

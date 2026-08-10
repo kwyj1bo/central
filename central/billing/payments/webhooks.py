@@ -56,28 +56,28 @@ def _resolve_gateway(adapter_key: str):
 
 
 def _store_and_enqueue(gateway, event, payload: bytes):
-	"""Idempotent store keyed on gateway_event_id; replays no-op (no second job).
+	"""Idempotent store keyed on event_id; replays no-op (no second job).
 
-	The unique constraint on gateway_event_id is the real guard: under a
-	concurrent flood two requests can both pass the exists() check, so the losing
-	insert is caught (DuplicateEntryError) and treated as an already-stored
-	replay — exactly one row, exactly one enqueued job.
+	The unique constraint on event_id is the real guard: under a concurrent flood
+	two requests can both pass the exists() check, so the losing insert is caught
+	(UniqueValidationError — event_id is a unique field, not the primary key) and
+	treated as an already-stored replay — exactly one row, exactly one enqueued job.
 	"""
-	if frappe.db.exists("Webhook Event", {"gateway_event_id": event.gateway_event_id}):
+	if frappe.db.exists("Webhook Event", {"event_id": event.gateway_event_id}):
 		return
 
 	try:
 		doc = frappe.get_doc(
 			{
 				"doctype": "Webhook Event",
-				"gateway": gateway.name,
-				"gateway_event_id": event.gateway_event_id,
+				"source": gateway.adapter_key,
+				"event_id": event.gateway_event_id,
 				"event_type": event.event_type,
 				"raw_payload": payload.decode() if isinstance(payload, bytes) else payload,
 				"status": "Received",
 			}
 		).insert(ignore_permissions=True)
-	except frappe.DuplicateEntryError:
+	except frappe.UniqueValidationError:
 		return  # lost the race — another request stored it first
 
 	frappe.enqueue(

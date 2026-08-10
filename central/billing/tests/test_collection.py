@@ -85,7 +85,7 @@ class FallbackTestBase(IntegrationTestCase):
 				   "data": {"object": {"id": txn_id}}}
 		return frappe.get_doc(
 			{
-				"doctype": "Webhook Event", "gateway": GATEWAY, "gateway_event_id": f"evt_{txn_id}",
+				"doctype": "Webhook Event", "source": "Stripe", "event_id": f"evt_{txn_id}",
 				"event_type": "payment_intent.payment_failed", "raw_payload": json.dumps(payload),
 				"status": "Received",
 			}

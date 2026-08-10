@@ -79,8 +79,8 @@ class TestOperatorAlerts(BillingTestCase):
 		event = frappe.get_doc(
 			{
 				"doctype": "Webhook Event",
-				"gateway": self.gateway,
-				"gateway_event_id": frappe.generate_hash(length=10),
+				"source": "Stripe",
+				"event_id": frappe.generate_hash(length=10),
 				"event_type": "payment_intent.succeeded",
 				"status": "Failed",
 				"error": "adapter blew up",
@@ -97,8 +97,8 @@ class TestOperatorAlerts(BillingTestCase):
 		frappe.get_doc(
 			{
 				"doctype": "Webhook Event",
-				"gateway": self.gateway,
-				"gateway_event_id": frappe.generate_hash(length=10),
+				"source": "Stripe",
+				"event_id": frappe.generate_hash(length=10),
 				"event_type": "payment_intent.succeeded",
 				"status": "Failed",
 				"error": "still retrying",

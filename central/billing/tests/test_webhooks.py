@@ -35,10 +35,10 @@ def signature(valid: bool):
 class TestStripeWebhookReceiver(IntegrationTestCase):
 	def setUp(self):
 		make_stripe_gateway()
-		frappe.db.delete("Webhook Event", {"gateway_event_id": EVENT_ID})
+		frappe.db.delete("Webhook Event", {"event_id": EVENT_ID})
 
 	def _events(self):
-		return frappe.db.count("Webhook Event", {"gateway_event_id": EVENT_ID})
+		return frappe.db.count("Webhook Event", {"event_id": EVENT_ID})
 
 	def test_valid_signed_event_is_stored_and_enqueued(self):
 		with signature(valid=True), patch("frappe.enqueue") as enqueue:
@@ -101,10 +101,10 @@ class TestRazorpayWebhookReceiver(IntegrationTestCase):
 
 	def setUp(self):
 		make_razorpay_gateway()
-		frappe.db.delete("Webhook Event", {"gateway_event_id": R_EVENT_ID})
+		frappe.db.delete("Webhook Event", {"event_id": R_EVENT_ID})
 
 	def _events(self):
-		return frappe.db.count("Webhook Event", {"gateway_event_id": R_EVENT_ID})
+		return frappe.db.count("Webhook Event", {"event_id": R_EVENT_ID})
 
 	def test_valid_signed_event_is_stored_and_enqueued(self):
 		with razorpay_signature(valid=True), patch("frappe.enqueue") as enqueue:
@@ -160,13 +160,13 @@ class TestWalletTopupWebhookBackstop(IntegrationTestCase):
 	def _purge(self):
 		frappe.db.delete("Credit Ledger Entry", {"team": TOPUP_TEAM})
 		frappe.db.delete("Credit Wallet", {"team": TOPUP_TEAM})
-		frappe.db.delete("Webhook Event", {"gateway": self.gateway})
+		frappe.db.delete("Webhook Event", {"source": "Razorpay"})
 
 	def _store_event(self, payment_id, event_type="payment.captured", **kw):
 		return frappe.get_doc({
 			"doctype": "Webhook Event",
-			"gateway": self.gateway,
-			"gateway_event_id": f"evt_{payment_id}_{frappe.generate_hash(length=6)}",
+			"source": "Razorpay",
+			"event_id": f"evt_{payment_id}_{frappe.generate_hash(length=6)}",
 			"event_type": event_type,
 			"raw_payload": _topup_payload(payment_id, TOPUP_TEAM, **kw),
 			"status": "Received",
@@ -231,8 +231,8 @@ class TestWalletTopupWebhookBackstop(IntegrationTestCase):
 		payload = json.loads(_topup_payload("pay_backstop_5", TOPUP_TEAM))
 		payload["payload"]["payment"]["entity"]["notes"].pop("team")
 		ev = frappe.get_doc({
-			"doctype": "Webhook Event", "gateway": self.gateway,
-			"gateway_event_id": "evt_incomplete_topup", "event_type": "payment.captured",
+			"doctype": "Webhook Event", "source": "Razorpay",
+			"event_id": "evt_incomplete_topup", "event_type": "payment.captured",
 			"raw_payload": json.dumps(payload), "status": "Received",
 		}).insert(ignore_permissions=True)
 

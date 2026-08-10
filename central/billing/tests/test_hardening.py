@@ -144,15 +144,15 @@ def valid_signature():
 class TestWebhookHardening(IntegrationTestCase):
 	def setUp(self):
 		make_stripe_gateway()
-		frappe.db.delete("Webhook Event", {"gateway_event_id": FLOOD_EVENT})
+		frappe.db.delete("Webhook Event", {"event_id": FLOOD_EVENT})
 		frappe.db.commit()
 
 	def tearDown(self):
-		frappe.db.delete("Webhook Event", {"gateway_event_id": FLOOD_EVENT})
+		frappe.db.delete("Webhook Event", {"event_id": FLOOD_EVENT})
 		frappe.db.commit()
 
 	def _count(self):
-		return frappe.db.count("Webhook Event", {"gateway_event_id": FLOOD_EVENT})
+		return frappe.db.count("Webhook Event", {"event_id": FLOOD_EVENT})
 
 	def test_replay_is_idempotent_no_second_job(self):
 		with valid_signature(), patch("frappe.enqueue") as enqueue:

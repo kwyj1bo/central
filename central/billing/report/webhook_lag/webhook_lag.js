@@ -18,8 +18,8 @@ frappe.query_reports["Webhook Lag"] = {
 		{
 			fieldname: "gateway",
 			label: __("Gateway"),
-			fieldtype: "Link",
-			options: "Payment Gateway",
+			fieldtype: "Select",
+			options: "\nStripe\nRazorpay",
 		},
 	],
 };

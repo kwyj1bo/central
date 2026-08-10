@@ -441,18 +441,24 @@ def ingest_event(event_type: str, payload: dict, occurred_at, event_id: str | No
 	if event_type not in _EVENT_HANDLERS:
 		return {"ok": True, "queued": False}
 
-	if event_id and frappe.db.exists("Atlas Event", {"event_id": event_id}):
+	if event_id and frappe.db.exists("Webhook Event", {"event_id": event_id}):
 		return {"ok": True, "queued": False, "status": "Ignored"}
+
+	# Atlas's payload never names its own cluster — Central resolves it from the
+	# authenticated session (_atlas_cluster). Fold it into the stored payload so
+	# apply_event still knows which region's mirror to write, without a dedicated
+	# column the flat, source-only shared schema doesn't have room for.
+	stored_payload = {**(payload or {}), "cluster": cluster}
 
 	try:
 		event = frappe.get_doc(
 			{
-				"doctype": "Atlas Event",
-				"cluster": cluster,
+				"doctype": "Webhook Event",
+				"source": "Atlas",
 				"event_id": event_id,
 				"event_type": event_type,
 				"occurred_at": occurred_at,
-				"raw_payload": frappe.as_json(payload or {}),
+				"raw_payload": frappe.as_json(stored_payload),
 				"status": "Received",
 			}
 		).insert(ignore_permissions=True)
@@ -481,16 +487,17 @@ def apply_event(event_name: str) -> None:
 	Retries the handler up to APPLY_EVENT_MAX_ATTEMPTS times, APPLY_EVENT_RETRY_SECONDS
 	apart, before giving up. A row that exhausts every attempt is left status=Failed
 	with the last error — that row *is* the dead queue: an operator finds it by
-	filtering Atlas Event on status=Failed and can replay it by calling
-	apply_event(name) again once the underlying issue is fixed.
+	filtering Webhook Event on source=Atlas, status=Failed and can replay it by
+	calling apply_event(name) again once the underlying issue is fixed.
 	"""
-	event = frappe.get_doc("Atlas Event", event_name)
+	event = frappe.get_doc("Webhook Event", event_name)
 	payload = frappe.parse_json(event.raw_payload) if event.raw_payload else {}
+	cluster = payload.pop("cluster")
 
 	last_exception = None
 	for attempt in range(1, APPLY_EVENT_MAX_ATTEMPTS + 1):
 		try:
-			_EVENT_HANDLERS[event.event_type](event.cluster, payload, event.occurred_at)
+			_EVENT_HANDLERS[event.event_type](cluster, payload, event.occurred_at)
 			last_exception = None
 			break
 		except Exception as e:

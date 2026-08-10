@@ -334,7 +334,7 @@ def apply_webhook(event_name: str) -> dict:
 	is the ONLY path that sets Paid.
 	"""
 	event = frappe.get_doc("Webhook Event", event_name)
-	adapter_key = frappe.db.get_value("Payment Gateway", event.gateway, "adapter_key")
+	adapter_key = event.source
 	payload = frappe.parse_json(event.raw_payload) if event.raw_payload else {}
 
 	txn_id = _extract_transaction_id(adapter_key, payload)
@@ -508,7 +508,11 @@ def _prune_webhook_events(cutoff) -> int:
 	yet handled (received/failed) so a stuck event stays visible for triage."""
 	stale = frappe.get_all(
 		"Webhook Event",
-		filters={"status": ["in", ("Processed", "Ignored")], "creation": ["<", cutoff]},
+		filters={
+			"status": ["in", ("Processed", "Ignored")],
+			"creation": ["<", cutoff],
+			"source": ["!=", "Atlas"],
+		},
 		pluck="name",
 	)
 	for name in stale:
@@ -668,7 +672,7 @@ def _credit_topup(event, topup: dict) -> dict:
 
 
 def _mark_event(event, status: str):
-	transition(event, status, actor="webhook", correlation=event.gateway_event_id)
+	transition(event, status, actor="webhook", correlation=event.event_id)
 	event.processed_at = frappe.utils.now_datetime()
 	event.save(ignore_permissions=True)
 

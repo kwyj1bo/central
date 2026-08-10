@@ -40,8 +40,8 @@ class TestWebhookLag(BillingTestCase):
 		event = frappe.get_doc(
 			{
 				"doctype": "Webhook Event",
-				"gateway": self.gateway,
-				"gateway_event_id": frappe.generate_hash(length=10),
+				"source": "Stripe",
+				"event_id": frappe.generate_hash(length=10),
 				"event_type": "payment_intent.succeeded",
 				"status": "Processed",
 				"processed_at": processed,
@@ -53,7 +53,7 @@ class TestWebhookLag(BillingTestCase):
 	def test_lag_is_measured_from_receipt_to_processing(self):
 		self._webhook("2026-06-10 10:00:00", "2026-06-10 10:00:05")
 		_columns, rows, _msg, _chart, summary = webhook_lag.execute(
-			{"from_date": "2026-06-01", "to_date": "2026-06-30", "gateway": self.gateway}
+			{"from_date": "2026-06-01", "to_date": "2026-06-30", "gateway": "Stripe"}
 		)
 		self.assertEqual(rows[0]["events"], 1)
 		self.assertEqual(rows[0]["worst_seconds"], 5.0)
@@ -63,7 +63,7 @@ class TestWebhookLag(BillingTestCase):
 		self._webhook("2026-06-10 10:00:00", "2026-06-10 10:00:02")
 		self._webhook("2026-06-10 11:00:00", "2026-06-10 11:05:00")
 		_columns, rows, _msg, _chart, _summary = webhook_lag.execute(
-			{"from_date": "2026-06-01", "to_date": "2026-06-30", "gateway": self.gateway}
+			{"from_date": "2026-06-01", "to_date": "2026-06-30", "gateway": "Stripe"}
 		)
 		self.assertEqual(rows[0]["events"], 2)
 		self.assertEqual(rows[0]["slow"], 1)
@@ -72,13 +72,13 @@ class TestWebhookLag(BillingTestCase):
 		frappe.get_doc(
 			{
 				"doctype": "Webhook Event",
-				"gateway": self.gateway,
-				"gateway_event_id": frappe.generate_hash(length=10),
+				"source": "Stripe",
+				"event_id": frappe.generate_hash(length=10),
 				"event_type": "payment_intent.succeeded",
 				"status": "Received",
 			}
 		).insert(ignore_permissions=True)
-		_columns, rows, _msg, _chart, _summary = webhook_lag.execute({"gateway": self.gateway})
+		_columns, rows, _msg, _chart, _summary = webhook_lag.execute({"gateway": "Stripe"})
 		self.assertEqual(rows, [])
 
 

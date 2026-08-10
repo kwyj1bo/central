@@ -134,8 +134,8 @@ class ChargeTestBase(IntegrationTestCase):
 		return frappe.get_doc(
 			{
 				"doctype": "Webhook Event",
-				"gateway": GATEWAY,
-				"gateway_event_id": gateway_event_id,
+				"source": "Stripe",
+				"event_id": gateway_event_id,
 				"event_type": event_type,
 				"raw_payload": json.dumps(payload),
 				"status": "Received",
@@ -194,7 +194,7 @@ class TestChargeInvoice(ChargeTestBase):
 				   "data": {"object": {"id": txn_id, "amount_received": amount_minor, "currency": "inr",
 									   "metadata": {"purpose": "invoice_payment", "invoice": invoice}}}}
 		return frappe.get_doc({
-			"doctype": "Webhook Event", "gateway": GATEWAY, "gateway_event_id": gateway_event_id,
+			"doctype": "Webhook Event", "source": "Stripe", "event_id": gateway_event_id,
 			"event_type": "payment_intent.succeeded", "raw_payload": json.dumps(payload),
 			"status": "Received",
 		}).insert(ignore_permissions=True).name
@@ -391,7 +391,7 @@ class TestFullStripeCycle(ChargeTestBase):
 		with patch.object(StripeAdapter, "verify_webhook_signature", return_value=True):
 			webhooks.process_webhook("Stripe", body, {"Stripe-Signature": "x"})
 
-		event_name = frappe.get_all("Webhook Event", {"gateway_event_id": "evt_cycle"}, pluck="name")[0]
+		event_name = frappe.get_all("Webhook Event", {"event_id": "evt_cycle"}, pluck="name")[0]
 		webhooks.handle_webhook_event(event_name)
 
 		invoice = frappe.get_doc("Invoice", inv)
@@ -473,7 +473,7 @@ class TestDeclineDetail(ChargeTestBase):
 		payload = {"id": gateway_event_id, "type": "payment_intent.payment_failed",
 				   "data": {"object": {"id": txn_id, "last_payment_error": error}}}
 		return frappe.get_doc({
-			"doctype": "Webhook Event", "gateway": GATEWAY, "gateway_event_id": gateway_event_id,
+			"doctype": "Webhook Event", "source": "Stripe", "event_id": gateway_event_id,
 			"event_type": "payment_intent.payment_failed", "raw_payload": json.dumps(payload),
 			"status": "Received",
 		}).insert(ignore_permissions=True).name

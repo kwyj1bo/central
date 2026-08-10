@@ -2,12 +2,13 @@
  "actions": [],
  "allow_rename": 0,
  "autoname": "hash",
- "creation": "2026-08-09 00:00:00.000000",
+ "creation": "2026-08-10 00:00:00.000000",
+ "description": "Idempotent store of every inbound webhook/integration event, from any source (Atlas cluster lifecycle events, Stripe/Razorpay gateway webhooks), deduped on event_id and filterable by source.",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "cluster",
+  "source",
   "event_id",
   "event_type",
   "status",
@@ -20,15 +21,16 @@
  ],
  "fields": [
   {
-   "fieldname": "cluster",
-   "fieldtype": "Link",
+   "fieldname": "source",
+   "fieldtype": "Select",
    "in_list_view": 1,
-   "label": "Cluster",
-   "options": "Atlas Instance",
+   "in_standard_filter": 1,
+   "label": "Source",
+   "options": "Atlas\nStripe\nRazorpay",
    "reqd": 1
   },
   {
-   "description": "The sending Atlas's own delivery id (its Central Event Log row name). Stable across a redelivery of the same event.",
+   "description": "The sending source's own delivery id. Stable across a redelivery of the same event.",
    "fieldname": "event_id",
    "fieldtype": "Data",
    "in_list_view": 1,
@@ -47,6 +49,7 @@
    "fieldname": "status",
    "fieldtype": "Select",
    "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Status",
    "options": "Received\nProcessed\nFailed\nIgnored"
   },
@@ -81,10 +84,10 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-08-09 00:00:00.000000",
+ "modified": "2026-08-10 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Central",
- "name": "Atlas Event",
+ "name": "Webhook Event",
  "owner": "Administrator",
  "permissions": [
   {

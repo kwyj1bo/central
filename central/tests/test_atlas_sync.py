@@ -58,11 +58,11 @@ class TestAtlasMirror(IntegrationTestCase):
 		# verify-and-queue path is covered by the dispatch tests below.
 		event_name = frappe.get_doc(
 			{
-				"doctype": "Atlas Event",
-				"cluster": self.region,
+				"doctype": "Webhook Event",
+				"source": "Atlas",
 				"event_type": event_type,
 				"occurred_at": occurred_at,
-				"raw_payload": frappe.as_json(vm),
+				"raw_payload": frappe.as_json({**vm, "cluster": self.region}),
 				"status": "Received",
 			}
 		).insert(ignore_permissions=True).name
@@ -527,12 +527,12 @@ class TestAtlasMirror(IntegrationTestCase):
 	def test_apply_event_marks_processed(self):
 		event_name = frappe.get_doc(
 			{
-				"doctype": "Atlas Event",
-				"cluster": self.region,
+				"doctype": "Webhook Event",
+				"source": "Atlas",
 				"event_type": "vm.created",
 				"occurred_at": "2026-06-18 10:00:00",
 				"raw_payload": frappe.as_json(
-					{"name": "vm-processed", "team": self.team.name, "status": "Running"}
+					{"name": "vm-processed", "team": self.team.name, "status": "Running", "cluster": self.region}
 				),
 				"status": "Received",
 			}
@@ -540,7 +540,7 @@ class TestAtlasMirror(IntegrationTestCase):
 
 		apply_event(event_name)
 
-		event = frappe.get_doc("Atlas Event", event_name)
+		event = frappe.get_doc("Webhook Event", event_name)
 		self.assertEqual(event.status, "Processed")
 		self.assertIsNotNone(event.processed_at)
 		# the handler actually ran, not just the status flip
@@ -551,12 +551,12 @@ class TestAtlasMirror(IntegrationTestCase):
 
 		event_name = frappe.get_doc(
 			{
-				"doctype": "Atlas Event",
-				"cluster": self.region,
+				"doctype": "Webhook Event",
+				"source": "Atlas",
 				"event_type": "vm.created",
 				"occurred_at": "2026-06-18 10:00:00",
 				"raw_payload": frappe.as_json(
-					{"name": "vm-retry", "team": self.team.name, "status": "Running"}
+					{"name": "vm-retry", "team": self.team.name, "status": "Running", "cluster": self.region}
 				),
 				"status": "Received",
 			}
@@ -571,7 +571,7 @@ class TestAtlasMirror(IntegrationTestCase):
 		self.assertEqual(handler.call_count, 3)
 		self.assertEqual(sleep.call_count, 2)
 		sleep.assert_called_with(3)
-		event = frappe.get_doc("Atlas Event", event_name)
+		event = frappe.get_doc("Webhook Event", event_name)
 		self.assertEqual(event.status, "Processed")
 		self.assertIsNotNone(event.processed_at)
 
@@ -580,12 +580,12 @@ class TestAtlasMirror(IntegrationTestCase):
 
 		event_name = frappe.get_doc(
 			{
-				"doctype": "Atlas Event",
-				"cluster": self.region,
+				"doctype": "Webhook Event",
+				"source": "Atlas",
 				"event_type": "vm.created",
 				"occurred_at": "2026-06-18 10:00:00",
 				"raw_payload": frappe.as_json(
-					{"name": "vm-deadletter", "team": self.team.name, "status": "Running"}
+					{"name": "vm-deadletter", "team": self.team.name, "status": "Running", "cluster": self.region}
 				),
 				"status": "Received",
 			}
@@ -601,7 +601,7 @@ class TestAtlasMirror(IntegrationTestCase):
 		# 3 attempts, 2 waits between them — the dead-queue row an operator can inspect.
 		self.assertEqual(handler.call_count, 3)
 		self.assertEqual(sleep.call_count, 2)
-		event = frappe.get_doc("Atlas Event", event_name)
+		event = frappe.get_doc("Webhook Event", event_name)
 		self.assertEqual(event.status, "Failed")
 		self.assertEqual(event.error, "always fails")
 		self.assertFalse(frappe.db.exists("Asset", "vm-deadletter"))
@@ -621,7 +621,7 @@ class TestAtlasMirror(IntegrationTestCase):
 
 		self.assertEqual(second, {"ok": True, "queued": False, "status": "Ignored"})
 		enqueue.assert_not_called()
-		self.assertEqual(frappe.db.count("Atlas Event", {"event_id": "atlas-evt-1"}), 1)
+		self.assertEqual(frappe.db.count("Webhook Event", {"event_id": "atlas-evt-1", "source": "Atlas"}), 1)
 
 	def test_concurrent_duplicate_event_id_loses_insert_race(self):
 		vm = {"name": "vm-race-evt", "team": self.team.name, "status": "Running"}
@@ -631,15 +631,15 @@ class TestAtlasMirror(IntegrationTestCase):
 				ingest_event("vm.created", vm, "2026-06-18 10:00:00", event_id="atlas-evt-race")
 
 			# Simulate two redeliveries racing past the exists() check together: blind
-			# the fast-path check to Atlas Event so ingest_event takes the insert path
+			# the fast-path check to Webhook Event so ingest_event takes the insert path
 			# anyway, exactly like a real concurrent redelivery would — the unique
 			# constraint on event_id is what has to catch it at that point.
 			real_exists = frappe.db.exists
 
-			def blind_to_atlas_event(dt, *a, **k):
-				return None if dt == "Atlas Event" else real_exists(dt, *a, **k)
+			def blind_to_webhook_event(dt, *a, **k):
+				return None if dt == "Webhook Event" else real_exists(dt, *a, **k)
 
-			with patch("frappe.db.exists", side_effect=blind_to_atlas_event), patch(
+			with patch("frappe.db.exists", side_effect=blind_to_webhook_event), patch(
 				"frappe.enqueue"
 			) as enqueue:
 				result = ingest_event("vm.created", vm, "2026-06-18 10:01:00", event_id="atlas-evt-race")
@@ -648,7 +648,7 @@ class TestAtlasMirror(IntegrationTestCase):
 
 		self.assertEqual(result, {"ok": True, "queued": False, "status": "Ignored"})
 		enqueue.assert_not_called()
-		self.assertEqual(frappe.db.count("Atlas Event", {"event_id": "atlas-evt-race"}), 1)
+		self.assertEqual(frappe.db.count("Webhook Event", {"event_id": "atlas-evt-race", "source": "Atlas"}), 1)
 
 	def test_mirror_recovers_when_exists_check_loses_insert_race(self):
 		from central.central.doctype.asset.asset import Asset

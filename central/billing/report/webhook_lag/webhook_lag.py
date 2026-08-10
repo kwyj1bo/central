@@ -23,9 +23,12 @@ def execute(filters: dict | None = None):
 
 
 def _events(filters: dict) -> list[dict]:
-	conditions = {"processed_at": ["is", "set"]}
+	# This report is scoped to payment-gateway webhooks specifically (it's titled
+	# "gateway webhook lag"); Atlas cluster events share the same table now but
+	# must not silently show up in a report about gateway latency.
+	conditions = {"processed_at": ["is", "set"], "source": ["!=", "Atlas"]}
 	if filters.get("gateway"):
-		conditions["gateway"] = filters["gateway"]
+		conditions["source"] = filters["gateway"]
 	if filters.get("from_date"):
 		conditions["creation"] = [">=", filters["from_date"]]
 	if filters.get("to_date"):
@@ -37,7 +40,7 @@ def _events(filters: dict) -> list[dict]:
 	return frappe.get_all(
 		"Webhook Event",
 		filters=conditions,
-		fields=["gateway", "creation", "processed_at", "status"],
+		fields=["source", "creation", "processed_at", "status"],
 		limit_page_length=0,
 	)
 
@@ -49,7 +52,7 @@ def _lag_seconds(event) -> float:
 def _by_gateway_and_day(events: list[dict]) -> list[dict]:
 	buckets: dict[tuple, list[float]] = {}
 	for e in events:
-		buckets.setdefault((e.gateway, frappe.utils.getdate(e.creation)), []).append(_lag_seconds(e))
+		buckets.setdefault((e.source, frappe.utils.getdate(e.creation)), []).append(_lag_seconds(e))
 
 	rows = []
 	for (gateway, day), lags in sorted(buckets.items(), key=lambda kv: (kv[0][1], kv[0][0]), reverse=True):
@@ -79,7 +82,7 @@ def _percentile(ordered: list[float], fraction: float) -> float:
 def _columns() -> list[dict]:
 	return [
 		{"label": _("Day"), "fieldname": "day", "fieldtype": "Date", "width": 110},
-		{"label": _("Gateway"), "fieldname": "gateway", "fieldtype": "Link", "options": "Payment Gateway", "width": 160},
+		{"label": _("Gateway"), "fieldname": "gateway", "fieldtype": "Data", "width": 160},
 		{"label": _("Events"), "fieldname": "events", "fieldtype": "Int", "width": 90},
 		{"label": _("Median (s)"), "fieldname": "median_seconds", "fieldtype": "Float", "width": 110},
 		{"label": _("p95 (s)"), "fieldname": "p95_seconds", "fieldtype": "Float", "width": 110},

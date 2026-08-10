@@ -42,11 +42,11 @@ def failed_webhooks() -> list[dict]:
 	"""Webhooks that failed to process and have not been retried since."""
 	cutoff = frappe.utils.add_to_date(frappe.utils.now_datetime(), hours=-WEBHOOK_FAILED_HOURS)
 	return [
-		{"alert": "failed_webhook", "subject": e.name, "team": None, "detail": f"{e.gateway} {e.event_type}: {e.error}"}
+		{"alert": "failed_webhook", "subject": e.name, "team": None, "detail": f"{e.source} {e.event_type}: {e.error}"}
 		for e in frappe.get_all(
 			"Webhook Event",
 			filters={"status": "Failed", "creation": ["<", cutoff]},
-			fields=["name", "gateway", "event_type", "error"],
+			fields=["name", "source", "event_type", "error"],
 			limit=100,
 		)
 	]
