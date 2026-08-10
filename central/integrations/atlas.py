@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import re
 import time
@@ -530,6 +532,21 @@ def _atlas_cluster() -> str:
 	return cluster
 
 
+def verify_atlas_signature(cluster: str, raw_body: bytes, signature_header: str | None) -> bool:
+	"""HMAC-verify an inbound event's raw body against the sending Atlas's own
+	webhook_secret (pushed at registration, alongside the service-user creds — a
+	separate credential from the bearer token that authenticated the session, so a
+	leaked/reused token alone can't forge a body). Same shape as the gateway
+	adapters' verify_webhook_signature: constant-time compare, no DB writes."""
+	secret = frappe.utils.password.get_decrypted_password(
+		"Atlas Instance", cluster, "webhook_secret", raise_exception=False
+	)
+	if not secret or not signature_header:
+		return False
+	expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+	return hmac.compare_digest(expected, signature_header)
+
+
 def _on_vm(cluster: str, payload: dict, occurred_at) -> None:
 	Asset.mirror_vm(cluster, payload, occurred_at=occurred_at)
 	# Once Atlas echoes the pilot_credential_id, bind the credential to its VM.
@@ -671,6 +688,7 @@ def register_atlas(instance) -> dict:
 	tunnel_ip = instance.tunnel_ip or settings.allocate_tunnel_ip()
 	service_user = _ensure_service_user(instance)
 	api_key, api_secret = _rotate_service_credentials(service_user)
+	webhook_secret = _generate_webhook_secret()
 
 	peer_added = False
 	try:
@@ -685,6 +703,7 @@ def register_atlas(instance) -> dict:
 				"central_url": frappe.utils.get_url(),
 				"service_api_key": api_key,
 				"service_api_secret": api_secret,
+				"webhook_secret": webhook_secret,
 			},
 		)
 		peer_public_key = provision["wg_public_key"]
@@ -694,6 +713,7 @@ def register_atlas(instance) -> dict:
 		instance.peer_public_key = peer_public_key
 		instance.peer_endpoint = peer_endpoint
 		instance.service_user = service_user
+		instance.webhook_secret = webhook_secret
 		instance.tunnel_status = "Provisioning"
 		instance.save(ignore_permissions=True)  # validate() derives tunnel_url from tunnel_ip
 
@@ -736,6 +756,7 @@ def _register_local(instance) -> dict:
 
 	service_user = _ensure_service_user(instance)
 	api_key, api_secret = _rotate_service_credentials(service_user)
+	webhook_secret = _generate_webhook_secret()
 
 	client.link_local(
 		instance.base_url,
@@ -743,10 +764,12 @@ def _register_local(instance) -> dict:
 			"central_url": frappe.utils.get_url(),
 			"service_api_key": api_key,
 			"service_api_secret": api_secret,
+			"webhook_secret": webhook_secret,
 		},
 	)
 
 	instance.service_user = service_user
+	instance.webhook_secret = webhook_secret
 	instance.tunnel_status = "Inactive"
 	instance.save(ignore_permissions=True)
 
@@ -796,6 +819,12 @@ def _rotate_service_credentials(user_name: str) -> tuple[str, str]:
 	user.api_secret = api_secret
 	user.save(ignore_permissions=True)
 	return api_key, api_secret
+
+
+def _generate_webhook_secret() -> str:
+	"""Fresh HMAC key for this Atlas to sign its outbound event payloads with.
+	Pushed alongside the service-user creds; rotation = re-register, same as them."""
+	return frappe.generate_hash(length=32)
 
 
 def _verify_over_tunnel(client, tunnel_url: str, attempts: int = 8, delay: float = 2.0) -> None:

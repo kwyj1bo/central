@@ -1,10 +1,13 @@
+import hashlib
+import hmac
 from unittest.mock import patch
 
 import frappe
 from frappe.tests import IntegrationTestCase
 
+from central.api.atlas import event as atlas_event_api
 from central.api.servers import refresh_assets, registry, start_server
-from central.integrations.atlas import apply_event, ingest_event, reconcile, reconcile_atlas
+from central.integrations.atlas import apply_event, ingest_event, reconcile, reconcile_atlas, verify_atlas_signature
 from central.tests.test_iam import ensure_user
 
 
@@ -34,6 +37,7 @@ class TestAtlasMirror(IntegrationTestCase):
 		# The Atlas authenticates as its scoped service user; the sender (= cluster) is
 		# resolved from that session, so the instance is keyed on service_user.
 		self.service_user = ensure_user("atlas-blr-sync@example.test")
+		self.webhook_secret = "test-webhook-secret"
 		if not frappe.db.exists("Atlas Instance", self.region):
 			frappe.get_doc(
 				{
@@ -44,10 +48,14 @@ class TestAtlasMirror(IntegrationTestCase):
 					"service_user": self.service_user,
 					"api_key": "k",
 					"api_secret": "s",
+					"webhook_secret": self.webhook_secret,
 				}
 			).insert()
 		else:
-			frappe.db.set_value("Atlas Instance", self.region, "service_user", self.service_user)
+			instance = frappe.get_doc("Atlas Instance", self.region)
+			instance.service_user = self.service_user
+			instance.webhook_secret = self.webhook_secret
+			instance.save(ignore_permissions=True)
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
@@ -523,6 +531,80 @@ class TestAtlasMirror(IntegrationTestCase):
 			frappe.set_user("Administrator")
 		self.assertEqual(result, {"ok": True, "queued": False})
 		enqueue.assert_not_called()
+
+	# --- signature verification -------------------------------------------
+
+	def test_verify_atlas_signature_accepts_valid_hmac(self):
+		body = b'{"type":"vm.created"}'
+		signature = hmac.new(self.webhook_secret.encode(), body, hashlib.sha256).hexdigest()
+		self.assertTrue(verify_atlas_signature(self.region, body, signature))
+
+	def test_verify_atlas_signature_rejects_wrong_secret(self):
+		body = b'{"type":"vm.created"}'
+		signature = hmac.new(b"someone-elses-secret", body, hashlib.sha256).hexdigest()
+		self.assertFalse(verify_atlas_signature(self.region, body, signature))
+
+	def test_verify_atlas_signature_rejects_tampered_body(self):
+		signed_body = b'{"type":"vm.created"}'
+		signature = hmac.new(self.webhook_secret.encode(), signed_body, hashlib.sha256).hexdigest()
+		tampered_body = b'{"type":"vm.deleted"}'
+		self.assertFalse(verify_atlas_signature(self.region, tampered_body, signature))
+
+	def test_verify_atlas_signature_rejects_missing_header(self):
+		body = b'{"type":"vm.created"}'
+		self.assertFalse(verify_atlas_signature(self.region, body, None))
+
+	def test_verify_atlas_signature_rejects_when_instance_has_no_secret(self):
+		instance = frappe.get_doc("Atlas Instance", self.region)
+		instance.webhook_secret = None
+		instance.save(ignore_permissions=True)
+		try:
+			body = b'{"type":"vm.created"}'
+			signature = hmac.new(self.webhook_secret.encode(), body, hashlib.sha256).hexdigest()
+			self.assertFalse(verify_atlas_signature(self.region, body, signature))
+		finally:
+			instance.webhook_secret = self.webhook_secret
+			instance.save(ignore_permissions=True)
+
+	def test_event_endpoint_rejects_bad_signature(self):
+		from unittest.mock import MagicMock
+
+		body = b'{"type":"vm.created"}'
+		mock_request = MagicMock()
+		mock_request.get_data.return_value = body
+		frappe.set_user(self.service_user)
+		try:
+			with patch.object(frappe.local, "request", mock_request, create=True), patch(
+				"frappe.get_request_header", return_value="not-the-right-signature"
+			), patch("frappe.enqueue") as enqueue:
+				result = atlas_event_api(type="vm.created", payload="{}", occurred_at="2026-06-18 10:00:00")
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(result, {"ok": False})
+		self.assertEqual(frappe.local.response.http_status_code, 400)
+		enqueue.assert_not_called()
+
+	def test_event_endpoint_accepts_valid_signature(self):
+		from unittest.mock import MagicMock
+
+		body = b'{"type":"vm.created"}'
+		signature = hmac.new(self.webhook_secret.encode(), body, hashlib.sha256).hexdigest()
+		mock_request = MagicMock()
+		mock_request.get_data.return_value = body
+		frappe.set_user(self.service_user)
+		try:
+			with patch.object(frappe.local, "request", mock_request, create=True), patch(
+				"frappe.get_request_header", return_value=signature
+			), patch("frappe.enqueue") as enqueue:
+				result = atlas_event_api(
+					type="vm.created",
+					payload='{"name": "vm-signed", "team": "' + self.team.name + '", "status": "Running"}',
+					occurred_at="2026-06-18 10:00:00",
+				)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertTrue(result["queued"])
+		enqueue.assert_called_once()
 
 	def test_apply_event_marks_processed(self):
 		event_name = frappe.get_doc(

@@ -6,7 +6,7 @@ from __future__ import annotations
 import frappe
 from frappe import _
 
-from central.integrations.atlas import ingest_event
+from central.integrations.atlas import _atlas_cluster, ingest_event, verify_atlas_signature
 
 
 @frappe.whitelist(methods=["POST"])
@@ -17,7 +17,17 @@ def event(**kwargs) -> dict:
 	then queues the mirror update so Atlas gets a fast ack. Body: `event_id`, `type`,
 	`payload`, `occurred_at`.
 
+	The bearer token proves *who* is calling; the signature (X-Central-Signature,
+	HMAC-SHA256 of the raw body with the sender's own webhook_secret) proves the
+	body itself wasn't altered in transit — checked first, before any DB work, same
+	ordering as the Stripe/Razorpay receiver.
 	"""
+	cluster = _atlas_cluster()
+	signature = frappe.get_request_header("X-Central-Signature")
+	if not verify_atlas_signature(cluster, frappe.request.get_data(), signature):
+		frappe.local.response.http_status_code = 400
+		return {"ok": False}
+
 	data = frappe._dict(kwargs)
 	payload = frappe.parse_json(data.payload) if isinstance(data.payload, str) else (data.payload or {})
 
