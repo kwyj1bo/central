@@ -12,6 +12,7 @@ import frappe
 import requests
 from frappe import _
 from frappe.frappeclient import FrappeClient, FrappeException
+from frappe.utils.password import get_decrypted_password
 
 from central.central.doctype.asset.asset import Asset
 from central.central.doctype.pilot_credential.pilot_credential import PilotCredential
@@ -545,9 +546,7 @@ def verify_atlas_signature(cluster: str, raw_body: bytes, signature_header: str 
 	separate credential from the bearer token that authenticated the session, so a
 	leaked/reused token alone can't forge a body). Same shape as the gateway
 	adapters' verify_webhook_signature: constant-time compare, no DB writes."""
-	secret = frappe.utils.password.get_decrypted_password(
-		"Atlas Instance", cluster, "webhook_secret", raise_exception=False
-	)
+	secret = get_decrypted_password("Atlas Instance", cluster, "webhook_secret", raise_exception=False)
 	if not secret or not signature_header:
 		return False
 	expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
