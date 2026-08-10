@@ -56,7 +56,17 @@ class TestAtlasMirror(IntegrationTestCase):
 		# ingest_event verifies the sender then queues the work; here we run the
 		# worker (apply_event) directly to assert its mirror effect. The
 		# verify-and-queue path is covered by the dispatch tests below.
-		apply_event(self.region, event_type, vm, occurred_at)
+		event_name = frappe.get_doc(
+			{
+				"doctype": "Atlas Event",
+				"cluster": self.region,
+				"event_type": event_type,
+				"occurred_at": occurred_at,
+				"raw_payload": frappe.as_json(vm),
+				"status": "Received",
+			}
+		).insert(ignore_permissions=True).name
+		apply_event(event_name)
 
 	# --- push -----------------------------------------------------------------
 
@@ -513,6 +523,132 @@ class TestAtlasMirror(IntegrationTestCase):
 			frappe.set_user("Administrator")
 		self.assertEqual(result, {"ok": True, "queued": False})
 		enqueue.assert_not_called()
+
+	def test_apply_event_marks_processed(self):
+		event_name = frappe.get_doc(
+			{
+				"doctype": "Atlas Event",
+				"cluster": self.region,
+				"event_type": "vm.created",
+				"occurred_at": "2026-06-18 10:00:00",
+				"raw_payload": frappe.as_json(
+					{"name": "vm-processed", "team": self.team.name, "status": "Running"}
+				),
+				"status": "Received",
+			}
+		).insert(ignore_permissions=True).name
+
+		apply_event(event_name)
+
+		event = frappe.get_doc("Atlas Event", event_name)
+		self.assertEqual(event.status, "Processed")
+		self.assertIsNotNone(event.processed_at)
+		# the handler actually ran, not just the status flip
+		self.assertEqual(frappe.db.get_value("Asset", "vm-processed", "status"), "Running")
+
+	def test_apply_event_retries_then_succeeds(self):
+		from unittest.mock import MagicMock
+
+		event_name = frappe.get_doc(
+			{
+				"doctype": "Atlas Event",
+				"cluster": self.region,
+				"event_type": "vm.created",
+				"occurred_at": "2026-06-18 10:00:00",
+				"raw_payload": frappe.as_json(
+					{"name": "vm-retry", "team": self.team.name, "status": "Running"}
+				),
+				"status": "Received",
+			}
+		).insert(ignore_permissions=True).name
+
+		handler = MagicMock(side_effect=[Exception("boom-1"), Exception("boom-2"), None])
+		with patch.dict("central.integrations.atlas._EVENT_HANDLERS", {"vm.created": handler}), patch(
+			"central.integrations.atlas.time.sleep"
+		) as sleep:
+			apply_event(event_name)
+
+		self.assertEqual(handler.call_count, 3)
+		self.assertEqual(sleep.call_count, 2)
+		sleep.assert_called_with(3)
+		event = frappe.get_doc("Atlas Event", event_name)
+		self.assertEqual(event.status, "Processed")
+		self.assertIsNotNone(event.processed_at)
+
+	def test_apply_event_marks_failed_after_max_attempts(self):
+		from unittest.mock import MagicMock
+
+		event_name = frappe.get_doc(
+			{
+				"doctype": "Atlas Event",
+				"cluster": self.region,
+				"event_type": "vm.created",
+				"occurred_at": "2026-06-18 10:00:00",
+				"raw_payload": frappe.as_json(
+					{"name": "vm-deadletter", "team": self.team.name, "status": "Running"}
+				),
+				"status": "Received",
+			}
+		).insert(ignore_permissions=True).name
+
+		handler = MagicMock(side_effect=RuntimeError("always fails"))
+		with patch.dict("central.integrations.atlas._EVENT_HANDLERS", {"vm.created": handler}), patch(
+			"central.integrations.atlas.time.sleep"
+		) as sleep:
+			with self.assertRaises(RuntimeError):
+				apply_event(event_name)
+
+		# 3 attempts, 2 waits between them — the dead-queue row an operator can inspect.
+		self.assertEqual(handler.call_count, 3)
+		self.assertEqual(sleep.call_count, 2)
+		event = frappe.get_doc("Atlas Event", event_name)
+		self.assertEqual(event.status, "Failed")
+		self.assertEqual(event.error, "always fails")
+		self.assertFalse(frappe.db.exists("Asset", "vm-deadletter"))
+
+	def test_duplicate_event_id_is_ignored(self):
+		vm = {"name": "vm-dup", "team": self.team.name, "status": "Running"}
+		frappe.set_user(self.service_user)
+		try:
+			with patch("frappe.enqueue"):
+				first = ingest_event("vm.created", vm, "2026-06-18 10:00:00", event_id="atlas-evt-1")
+			self.assertTrue(first["queued"])
+
+			with patch("frappe.enqueue") as enqueue:
+				second = ingest_event("vm.created", vm, "2026-06-18 10:05:00", event_id="atlas-evt-1")
+		finally:
+			frappe.set_user("Administrator")
+
+		self.assertEqual(second, {"ok": True, "queued": False, "status": "Ignored"})
+		enqueue.assert_not_called()
+		self.assertEqual(frappe.db.count("Atlas Event", {"event_id": "atlas-evt-1"}), 1)
+
+	def test_concurrent_duplicate_event_id_loses_insert_race(self):
+		vm = {"name": "vm-race-evt", "team": self.team.name, "status": "Running"}
+		frappe.set_user(self.service_user)
+		try:
+			with patch("frappe.enqueue"):
+				ingest_event("vm.created", vm, "2026-06-18 10:00:00", event_id="atlas-evt-race")
+
+			# Simulate two redeliveries racing past the exists() check together: blind
+			# the fast-path check to Atlas Event so ingest_event takes the insert path
+			# anyway, exactly like a real concurrent redelivery would — the unique
+			# constraint on event_id is what has to catch it at that point.
+			real_exists = frappe.db.exists
+
+			def blind_to_atlas_event(dt, *a, **k):
+				return None if dt == "Atlas Event" else real_exists(dt, *a, **k)
+
+			with patch("frappe.db.exists", side_effect=blind_to_atlas_event), patch(
+				"frappe.enqueue"
+			) as enqueue:
+				result = ingest_event("vm.created", vm, "2026-06-18 10:01:00", event_id="atlas-evt-race")
+		finally:
+			frappe.set_user("Administrator")
+
+		self.assertEqual(result, {"ok": True, "queued": False, "status": "Ignored"})
+		enqueue.assert_not_called()
+		self.assertEqual(frappe.db.count("Atlas Event", {"event_id": "atlas-evt-race"}), 1)
 
 	def test_mirror_recovers_when_exists_check_loses_insert_race(self):
 		from central.central.doctype.asset.asset import Asset
