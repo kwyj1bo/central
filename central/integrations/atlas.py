@@ -511,6 +511,13 @@ def apply_event(event_name: str) -> None:
 		event.status = "Failed"
 		event.error = str(last_exception)
 		event.save(ignore_permissions=True)
+		# execute_job's except-Exception handler rolls back the transaction before
+		# re-raising (frappe/utils/background_jobs.py) — without this commit, the
+		# Failed stamp above would be wiped the instant we raise, and the row would
+		# be left stuck at Received with no trace anything went wrong. Committing
+		# here, before the raise, is what makes this row survivable as a dead-queue
+		# entry instead of a silently lost one.
+		frappe.db.commit()
 		raise last_exception
 
 	event.status = "Processed"

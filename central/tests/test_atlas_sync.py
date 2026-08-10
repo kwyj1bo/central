@@ -688,6 +688,46 @@ class TestAtlasMirror(IntegrationTestCase):
 		self.assertEqual(event.error, "always fails")
 		self.assertFalse(frappe.db.exists("Asset", "vm-deadletter"))
 
+	def test_apply_event_failed_stamp_survives_execute_job_rollback(self):
+		# apply_event runs inside frappe.utils.background_jobs.execute_job, whose
+		# except-Exception handler does frappe.db.rollback(chain=True) before
+		# re-raising. A plain save()-then-raise in apply_event would have that save
+		# wiped by that rollback, silently stranding the row at Received with no
+		# error recorded — apply_event must commit its own Failed stamp before it
+		# raises so it survives. This replicates execute_job's own handler exactly
+		# (frappe/utils/background_jobs.py) to prove that, rather than trusting the
+		# call chain.
+		from unittest.mock import MagicMock
+
+		event_name = frappe.get_doc(
+			{
+				"doctype": "Webhook Event",
+				"source": "Atlas",
+				"event_type": "vm.created",
+				"occurred_at": "2026-06-18 10:00:00",
+				"raw_payload": frappe.as_json(
+					{"name": "vm-rollback", "team": self.team.name, "status": "Running", "cluster": self.region}
+				),
+				"status": "Received",
+			}
+		).insert(ignore_permissions=True).name
+		frappe.db.commit()
+
+		handler = MagicMock(side_effect=RuntimeError("boom"))
+		with patch.dict("central.integrations.atlas._EVENT_HANDLERS", {"vm.created": handler}), patch(
+			"central.integrations.atlas.time.sleep"
+		):
+			with self.assertRaises(RuntimeError):
+				apply_event(event_name)
+
+		# execute_job's own handler, replicated exactly.
+		frappe.db.rollback(chain=True)
+		frappe.db.commit(chain=True)
+
+		event = frappe.get_doc("Webhook Event", event_name)
+		self.assertEqual(event.status, "Failed")
+		self.assertEqual(event.error, "boom")
+
 	def test_duplicate_event_id_is_ignored(self):
 		vm = {"name": "vm-dup", "team": self.team.name, "status": "Running"}
 		frappe.set_user(self.service_user)
